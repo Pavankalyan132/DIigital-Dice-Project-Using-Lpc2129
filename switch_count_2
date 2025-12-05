@@ -1,0 +1,119 @@
+#include <LPC21xx.h>
+
+#define DATA_MASK   0xFF        // P0.0 - P0.7 connected to LCD data pins
+#define RS_PIN      (1<<8)      // P0.8  -> RS
+#define E_PIN       (1<<9)      // P0.9  -> E
+
+void LCD_CMD(unsigned char);
+void LCD_DATA(unsigned char);
+void LCD_INIT(void);
+void delay_ms(unsigned int);
+void LCD_STRING(char *);
+
+volatile int random_val = 0;
+
+//---------------------------------------------------------
+//               EXTERNAL INTERRUPT ISR
+//---------------------------------------------------------
+void Random_number(void) __irq
+{
+    EXTINT = 0x01;                  // Clear EINT0 interrupt flag
+
+    random_val = (T0TC % 6) + 1;    // Random value from 1 to 6
+
+    LCD_CMD(0xC0);                  // Move to 2nd line
+    LCD_DATA(random_val + '0');     // Convert to ASCII and print
+
+    VICVectAddr = 0;                // Acknowledge interrupt controller
+}
+
+//---------------------------------------------------------
+//                          MAIN
+//---------------------------------------------------------
+int main(void)
+{
+    LCD_INIT();
+    LCD_CMD(0x80);
+    LCD_STRING("Digital Dice");
+
+    // ---------------------- TIMER0 ----------------------
+    T0PR = 15000 - 1;         // 1ms tick (15MHz / 15000 = 1 KHz)
+    T0TCR = 0x01;             // Timer0 Enable
+
+    // ---------------------- EINT0 on P0.16 ----------------------
+    PINSEL1 |= (1<<0);        // 01 -> P0.16 = EINT0
+
+    EXTMODE  = 0x01;          // Edge sensitive
+    EXTPOLAR = 0x01;          // Rising edge triggered
+
+    // ---------------------- VIC ----------------------
+    VICIntSelect &= ~(1<<14);           // IRQ
+    VICVectCntl0  = (1<<5) | 14;        // Enable slot + interrupt number
+    VICVectAddr0  = (unsigned)Random_number;
+    VICIntEnable  = (1<<14);            // Enable EINT0 interrupt
+
+    while(1)
+    {
+        // Nothing here - waiting for interrupt
+    }
+}
+
+//---------------------------------------------------------
+//                     LCD FUNCTIONS
+//---------------------------------------------------------
+void LCD_CMD(unsigned char cmd)
+{
+    int d;
+
+    IOCLR0 = RS_PIN;         // Command mode
+    IOCLR0 = DATA_MASK;      // Clear old data
+    IOSET0 = cmd;            // Put command
+
+    IOSET0 = E_PIN;          // E=1
+    for (d=0; d<200; d++);
+    IOCLR0 = E_PIN;          // E=0
+
+    delay_ms(2);
+}
+
+void LCD_DATA(unsigned char data)
+{
+    int d;
+
+    IOSET0 = RS_PIN;         // Data mode
+    IOCLR0 = DATA_MASK;
+    IOSET0 = data;
+
+    IOSET0 = E_PIN;
+    for (d=200; d>0; d--);
+    IOCLR0 = E_PIN;
+
+    delay_ms(2);
+}
+
+void LCD_INIT(void)
+{
+    IODIR0 |= DATA_MASK | RS_PIN | E_PIN;
+
+    delay_ms(20);
+
+    LCD_CMD(0x38);  // 8-bit, 2-line
+    LCD_CMD(0x0C);  // Display ON, cursor OFF
+    LCD_CMD(0x01);  // Clear display
+    delay_ms(2);
+    LCD_CMD(0x06);  // Auto Increment
+    LCD_CMD(0x80);  // First line
+}
+
+void LCD_STRING(char *s)
+{
+    while (*s)
+        LCD_DATA(*s++);
+}
+
+void delay_ms(unsigned int ms)
+{
+    unsigned int i, j;
+    for (i=0; i<ms; i++)
+        for (j=0; j<6000; j++);
+}
